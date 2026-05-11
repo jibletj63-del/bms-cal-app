@@ -1073,8 +1073,7 @@
   <div id="sumResult" class="notice info">Awaiting run data</div>
 
   <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="showScreen('screen-runs')">← Edit Runs</button>
-  <button class="btn btn-success" style="margin-bottom:10px;" onclick="triggerCertDownload()" id="downloadBtn">⬇ DOWNLOAD CERTIFICATE</button>
-  <button class="btn btn-primary" onclick="goToNextMeter()">NEXT METER / FINISH →</button>
+  <button class="btn btn-success" style="margin-bottom:10px;" onclick="goToNextMeter()" id="downloadBtn">⬇ GENERATE CERT &amp; CONTINUE →</button>
   <div style="height:24px;"></div>
 </div>
 
@@ -1683,10 +1682,23 @@ function goToSummary() {
     }
   }
 
+  // Reset the generate-and-continue button to its default state each time
+  // the summary is shown (in case it shows leftover text from a previous meter)
+  const dlBtn = document.getElementById('downloadBtn');
+  if (dlBtn) {
+    dlBtn.textContent = '⬇ GENERATE CERT & CONTINUE →';
+    dlBtn.disabled = false;
+  }
+
   showScreen('screen-summary');
 }
 
 function goToNextMeter() {
+  // Auto-generate this meter's certificate before moving on.
+  // triggerCertDownload() snapshots form values & cert number synchronously,
+  // so it's safe to call before we change state or screens.
+  triggerCertDownload();
+
   // Save current meter data
   state.completedMeters.push({
     certNo: state.certNumbers[state.currentMeterIndex],
