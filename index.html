@@ -1105,24 +1105,6 @@
 
 <script>
 
-/* ── GLOBAL ERROR HANDLER (mobile diagnostic) ───────────────────────────
-   Catches any uncaught JS error during page load or interaction
-   and shows it as a banner at the top of the screen. Remove once
-   the Drive auth problem is resolved.
-*/
-window.addEventListener('error', function(e) {
-  try {
-    var bar = document.getElementById('jsErrBanner');
-    if (!bar) {
-      bar = document.createElement('div');
-      bar.id = 'jsErrBanner';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c00;color:#fff;padding:10px;font-size:13px;z-index:99999;white-space:pre-wrap;word-break:break-word;';
-      document.body && document.body.appendChild(bar);
-    }
-    bar.textContent = 'JS ERROR: ' + (e.message || 'unknown') + '\nAt: ' + (e.filename || '') + ':' + (e.lineno || '') + ':' + (e.colno || '');
-  } catch (_) {}
-});
-
 /* ── TOAST NOTIFICATION ─────────────────────────────────────────────── */
 var _toastTimer = null;
 function showToast(msg, type) {
@@ -1711,11 +1693,12 @@ function goToSummary() {
   showScreen('screen-summary');
 }
 
-function goToNextMeter() {
+async function goToNextMeter() {
   // Auto-generate this meter's certificate before moving on.
-  // triggerCertDownload() snapshots form values & cert number synchronously,
-  // so it's safe to call before we change state or screens.
-  triggerCertDownload();
+  // We MUST await this — otherwise the next meter's generation starts before
+  // this one's file has been delivered to the browser, and mobile browsers
+  // drop the earlier download in favour of the newer one.
+  await triggerCertDownload();
 
   // Save current meter data
   state.completedMeters.push({
@@ -1846,6 +1829,9 @@ function previewCerts() {
 }
 
 // ── TRIGGER DOWNLOAD ─────────────────────────────────────────────────────────
+// Returns a promise that resolves once the cert has been fully generated,
+// downloaded, and (if connected) saved to Drive. Callers that need to wait
+// before proceeding (e.g. goToNextMeter) should await this.
 function triggerCertDownload() {
   const idx = state.currentMeterIndex;
   const meterData = {
@@ -1869,75 +1855,79 @@ function triggerCertDownload() {
   btn.textContent = 'Generating...';
   btn.disabled = true;
 
-  setTimeout(async () => {
+  return new Promise((resolve) => {
+    setTimeout(async () => {
 
-    // ── OFFLINE: save to queue and bail out ──────────────────────────────────
-    if (!navigator.onLine) {
-      const payload = buildCertPayload(meterData);
-      const jobDateRaw = document.getElementById('jobDate').value;
-      addToQueue({
-        id:           Date.now() + '-' + Math.random().toString(36).slice(2),
-        payload:      payload,
-        filename:     payload.filename,
-        jobNumber:    state.jobNumber,
-        certNo:       meterData.certNo,
-        customer:     state.customer,
-        site:         state.site,
-        meterIdentity: meterData.identity,
-        jobDate:      jobDateRaw,
-        queuedAt:     new Date().toISOString()
-      });
-      btn.textContent = '📋 Queued — will sync when online';
-      btn.disabled = false;
-      return;
-    }
-
-    btn.textContent = 'Contacting server...';
-
-    const filename = await generateCertificate(meterData);
-    if (!filename) { btn.disabled = false; btn.textContent = 'Download Certificate'; return; }
-
-    btn.textContent = '✓ Downloaded';
-
-    // If Drive connected, fetch a second copy from backend and save to Drive
-    if (driveConnected && accessToken) {
-      btn.textContent = 'Saving to Drive...';
-      try {
+      // ── OFFLINE: save to queue and bail out ──────────────────────────────────
+      if (!navigator.onLine) {
+        const payload = buildCertPayload(meterData);
         const jobDateRaw = document.getElementById('jobDate').value;
-        const dateObj = jobDateRaw ? new Date(jobDateRaw) : new Date();
-        const driveResponse = await fetch(FLASK_BACKEND + '/fill-cert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildCertPayload(meterData))
-        });
-        let saved = false;
-        if (driveResponse.ok) {
-          const blob = await driveResponse.blob();
-          const ab = await blob.arrayBuffer();
-          const outBuffer = new Uint8Array(ab);
-          saved = await saveCertToDrive(filename, outBuffer, state.customer, dateObj);
-        }
-
-        await appendToCertLog([{
-          jobNumber: state.jobNumber,
-          certNo: meterData.certNo,
-          customer: state.customer,
-          site: state.site,
+        addToQueue({
+          id:           Date.now() + '-' + Math.random().toString(36).slice(2),
+          payload:      payload,
+          filename:     payload.filename,
+          jobNumber:    state.jobNumber,
+          certNo:       meterData.certNo,
+          customer:     state.customer,
+          site:         state.site,
           meterIdentity: meterData.identity,
-          date: jobDateRaw,
-          filename: filename
-        }]);
-
-        btn.textContent = saved ? '✓ Saved to Drive — ' + filename : '✓ Downloaded (Drive save failed)';
-      } catch(e) {
-        console.error('Drive save error:', e);
-        btn.textContent = '✓ Downloaded (Drive save failed)';
+          jobDate:      jobDateRaw,
+          queuedAt:     new Date().toISOString()
+        });
+        btn.textContent = '📋 Queued — will sync when online';
+        btn.disabled = false;
+        resolve();
+        return;
       }
-    } else {
-      btn.textContent = '✓ Downloaded — ' + filename;
-    }
-    btn.disabled = false;
-  }, 100);
+
+      btn.textContent = 'Contacting server...';
+
+      const filename = await generateCertificate(meterData);
+      if (!filename) { btn.disabled = false; btn.textContent = 'Download Certificate'; resolve(); return; }
+
+      btn.textContent = '✓ Downloaded';
+
+      // If Drive connected, fetch a second copy from backend and save to Drive
+      if (driveConnected && accessToken) {
+        btn.textContent = 'Saving to Drive...';
+        try {
+          const jobDateRaw = document.getElementById('jobDate').value;
+          const dateObj = jobDateRaw ? new Date(jobDateRaw) : new Date();
+          const driveResponse = await fetch(FLASK_BACKEND + '/fill-cert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildCertPayload(meterData))
+          });
+          let saved = false;
+          if (driveResponse.ok) {
+            const blob = await driveResponse.blob();
+            const ab = await blob.arrayBuffer();
+            const outBuffer = new Uint8Array(ab);
+            saved = await saveCertToDrive(filename, outBuffer, state.customer, dateObj);
+          }
+
+          await appendToCertLog([{
+            jobNumber: state.jobNumber,
+            certNo: meterData.certNo,
+            customer: state.customer,
+            site: state.site,
+            meterIdentity: meterData.identity,
+            date: jobDateRaw,
+            filename: filename
+          }]);
+
+          btn.textContent = saved ? '✓ Saved to Drive — ' + filename : '✓ Downloaded (Drive save failed)';
+        } catch(e) {
+          console.error('Drive save error:', e);
+          btn.textContent = '✓ Downloaded (Drive save failed)';
+        }
+      } else {
+        btn.textContent = '✓ Downloaded — ' + filename;
+      }
+      btn.disabled = false;
+      resolve();
+    }, 100);
+  });
 }
 
 // ── METER DATABASE ────────────────────────────────────────────────────────────
@@ -2391,19 +2381,8 @@ async function generateCertificate(meterData) {
 
 // ── INIT ───────────────────────────────────────────────────────────────────
 function handleDriveConnect() {
-  // Show on-screen confirmation that the button click was received,
-  // and surface any error that would otherwise be silent on mobile.
-  try {
-    alert('Button works. About to redirect to Google sign-in...');
-    if (typeof connectToDrive !== 'function') {
-      alert('ERROR: connectToDrive function is not defined!');
-      return;
-    }
-    connectToDrive();
-  } catch (e) {
-    alert('ERROR in handleDriveConnect: ' + (e && e.message ? e.message : e));
-    console.error('handleDriveConnect error:', e);
-  }
+  // Redirect to Google OAuth — we come back with token in URL hash
+  connectToDrive();
 }
 
 async function onDriveConnected() {
