@@ -1105,6 +1105,24 @@
 
 <script>
 
+/* ── GLOBAL ERROR HANDLER (mobile diagnostic) ───────────────────────────
+   Catches any uncaught JS error during page load or interaction
+   and shows it as a banner at the top of the screen. Remove once
+   the Drive auth problem is resolved.
+*/
+window.addEventListener('error', function(e) {
+  try {
+    var bar = document.getElementById('jsErrBanner');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'jsErrBanner';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c00;color:#fff;padding:10px;font-size:13px;z-index:99999;white-space:pre-wrap;word-break:break-word;';
+      document.body && document.body.appendChild(bar);
+    }
+    bar.textContent = 'JS ERROR: ' + (e.message || 'unknown') + '\nAt: ' + (e.filename || '') + ':' + (e.lineno || '') + ':' + (e.colno || '');
+  } catch (_) {}
+});
+
 /* ── TOAST NOTIFICATION ─────────────────────────────────────────────── */
 var _toastTimer = null;
 function showToast(msg, type) {
@@ -2373,8 +2391,19 @@ async function generateCertificate(meterData) {
 
 // ── INIT ───────────────────────────────────────────────────────────────────
 function handleDriveConnect() {
-  // Redirect to Google OAuth — we come back with token in URL hash
-  connectToDrive();
+  // Show on-screen confirmation that the button click was received,
+  // and surface any error that would otherwise be silent on mobile.
+  try {
+    alert('Button works. About to redirect to Google sign-in...');
+    if (typeof connectToDrive !== 'function') {
+      alert('ERROR: connectToDrive function is not defined!');
+      return;
+    }
+    connectToDrive();
+  } catch (e) {
+    alert('ERROR in handleDriveConnect: ' + (e && e.message ? e.message : e));
+    console.error('handleDriveConnect error:', e);
+  }
 }
 
 async function onDriveConnected() {
